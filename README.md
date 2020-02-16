@@ -34,7 +34,7 @@ Environment variables for the deployment are:
 
 Use `make`, these values can be passed in with:
 ```
-$ make deploy DEBUG=true
+$ make build DEBUG=true
 ```
 
 ## Makefile usage
