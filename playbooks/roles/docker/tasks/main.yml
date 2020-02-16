@@ -17,6 +17,11 @@
     host_grouping: "{% if inventory_hostname == groups['master'][0] %}master{% else %}worker{% endif %}"
     nvidia_driver_exists: "{{ nvidia_driver_check.rc == 0 }}"
 
+- name: Check nvidia-driver installed when Nvidia support requested
+  fail:
+    msg: The Nvidia driver has not been found (dpkg -l | grep nvidia-driver) - aborting.
+  when: activate_nvidia|bool and not nvidia_driver_exists|bool
+
 # required for k8s ipvs proxy
 - name: Load ipvs kernel drivers
   modprobe:

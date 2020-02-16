@@ -26,6 +26,11 @@
     local_user_dir: "/home/{{ username_on_the_host.stdout_lines[0] }}"
     nvidia_driver_exists: "{{ nvidia_driver_check.rc == 0 }}"
 
+- name: Check nvidia-driver installed when Nvidia support requested
+  fail:
+    msg: The Nvidia driver has not been found (dpkg -l | grep nvidia-driver) - aborting.
+  when: activate_nvidia|bool and not nvidia_driver_exists|bool
+  
 - name: Add k8s apt key
   apt_key:
     url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
