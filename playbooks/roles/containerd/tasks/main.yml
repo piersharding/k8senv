@@ -1,0 +1,133 @@
+---
+
+- name: Check if the nvidia driver is install
+  shell: dpkg -l | grep nvidia-driver
+  changed_when: False
+  register: nvidia_driver_check
+  ignore_errors: true
+
+- debug: var=nvidia_driver_check.rc
+  when: debug|bool
+
+- name: Set the host grouping
+  set_fact:
+    host_grouping: "{% if inventory_hostname == groups['master'][0] %}master{% else %}worker{% endif %}"
+    nvidia_driver_exists: "{{ nvidia_driver_check.rc == 0 }}"
+
+- name: Load containerd kernel drivers
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - br_netfilter
+    - overlay
+
+- name: add containerd kernel drivers to startup
+  lineinfile:
+    line: "{{ item }}"
+    dest: /etc/modules-load.d/containerd.conf
+    create: yes
+    owner: root
+    group: root
+    mode: 0644
+  with_items:
+    - overlay
+    - br_netfilter
+  register: installedcontainerd
+
+- name: Set net.bridge.bridge-nf-call-iptables to 1
+  sysctl: name=net.bridge.bridge-nf-call-iptables value=1 state=present ignoreerrors=yes
+
+- name: Set net.bridge.bridge-nf-call-ip6tables to 1
+  sysctl: name=net.bridge.bridge-nf-call-ip6tables value=1 state=present ignoreerrors=yes
+
+- name: Set net.bridge.bridge-nf-call-arptables to 1
+  sysctl: name=net.bridge.bridge-nf-call-arptables value=1 state=present ignoreerrors=yes
+
+- name: Set net.ipv4.ip_forward to 1
+  sysctl: name=net.ipv4.ip_forward value=1 state=present ignoreerrors=yes
+
+- name: add containerd cri sysctl vars
+  lineinfile:
+    line: "{{ item }}"
+    dest: /etc/sysctl.d/99-kubernetes-cri.conf
+    create: yes
+    owner: root
+    group: root
+    mode: 0644
+  with_items:
+    - "net.bridge.bridge-nf-call-iptables  = 1"
+    - "net.ipv4.ip_forward                 = 1"
+    - "net.bridge.bridge-nf-call-ip6tables = 1"
+    - "net.bridge.bridge-nf-call-arptables = 1"
+  register: installedcontainerd
+
+- name: Install packages required for containerd
+  apt:
+    name: "{{ item }}"
+    state: latest
+  with_items:
+    - apt-transport-https
+    - ca-certificates
+    - software-properties-common
+    - curl
+
+- name: Add dockerproject apt key
+  apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+
+- name: Add dockerproject apt source
+  lineinfile:
+    line: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ubuntu_version }} stable"
+    dest: /etc/apt/sources.list.d/docker.list
+    create: yes
+    owner: root
+    group: root
+    mode: 0644
+  register: installedcontainerd
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install containerd.io
+  apt:
+    name: "containerd.io={{ containerd_version }}"
+    force: yes
+    state: present
+  notify:
+    - restart containerd
+    - restart docker
+
+- name: Configure containerd server
+  template: src=containerd-config.toml.j2 dest="/etc/containerd/config.toml"
+  notify:
+    - restart containerd
+    - restart docker
+
+- name: Check if crictl exists
+  stat:
+    path: /usr/local/bin/crictl
+  register: stat_crictl
+
+- name: Download crictl
+  get_url:
+    url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ crictl_version }}/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+    dest: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+  when: stat_crictl.stat.exists == False
+
+- name: unpack crictl
+  unarchive:
+    src: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+    dest: /usr/local/bin
+  when: stat_crictl.stat.exists == False
+
+- name: tidy up crictl download
+  file:
+    path: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+    state: absent
+
+- name: configure crictl for containerd
+  template: src=crictl.yaml.j2 dest="/etc/crictl.yaml"
+
+- meta: flush_handlers

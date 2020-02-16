@@ -1,0 +1,9 @@
+/test*
+*.retry
+playbooks/tmp
+.vscode/
+/cssh*
+/*.sh
+/*.sql
+/*.yaml
+/PrivateRules.mak

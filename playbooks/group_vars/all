@@ -1,0 +1,32 @@
+---
+# change if required or override at runtime using --extra-vars
+
+ssh_public_key: "{{ lookup('env', 'HOME') }}/.ssh/id_rsa.pub"
+identityfile: "{{ lookup('env', 'HOME') }}/.ssh/id_rsa"
+
+# set to true to show host variables
+debug: false
+
+docker_version: 5:19.03.6~3-0~ubuntu-cosmic
+
+docker_repo: wattle:5000
+
+ubuntu_version: cosmic
+
+containerd_version: 1.2.6-3
+activate_containerd: true
+crictl_version: v1.17.0
+
+activate_nvidia: false
+
+kubernetes_ubuntu_version: xenial
+
+kubernetes_version: 1.17.3
+
+kube_version: "{{ kubernetes_version }}-00"
+
+calico_version: v3.11
+
+calico_interfaces: wlp1s.*,wlo.*,enxa0.*
+
+nginx_ingress_version: 0.29.0

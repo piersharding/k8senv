@@ -1,0 +1,39 @@
+apiVersion: kubeadm.k8s.io/v1beta2
+kind: JoinConfiguration
+caCertPath: /etc/kubernetes/pki/ca.crt
+discovery:
+  bootstrapToken:
+    apiServerEndpoint: {{ join_endpoint }}
+    token: {{ join_token }}
+    caCertHashes:
+    - "{{ join_cahash }}"
+    unsafeSkipCAVerification: true
+  timeout: 5m0s
+nodeRegistration:
+  criSocket: {% if activate_containerd %}/run/containerd/containerd.sock{% else %}/var/run/dockershim.sock{% endif %}
+  
+  name: {{ current_hostname }}
+  taints: []
+#  kubeletExtraArgs:
+#    resolv-conf: /run/systemd/resolve/resolv.conf
+#    network-plugin: cni
+#    cgroup-driver: "cgroupfs"
+---
+apiVersion: kubeadm.k8s.io/v1beta2
+kind: ClusterConfiguration
+controlPlaneEndpoint: {{ join_endpoint }}
+kubernetesVersion: v1.17.1
+networking:
+  dnsDomain: cluster.local
+  podSubnet: "10.200.0.0/16"
+  serviceSubnet: 10.96.0.0/12
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+failSwapOn: false
+resolvConf: /run/systemd/resolve/resolv.conf
+imageGCHighThresholdPercent: 100
+evictionHard:
+  nodefs.available: "0%"
+  nodefs.inodesFree: "0%"
+  imagefs.available: "0%"

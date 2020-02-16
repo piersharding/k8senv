@@ -1,0 +1,16 @@
+#!/usr/bin/env ansible-playbook
+---
+
+- name: "Show debug info"
+  hosts: cluster
+  become: yes
+  tasks:
+    - name: "Show docker nodes info"
+      debug: var=hostvars[inventory_hostname]
+      when: debug|bool
+
+- name: "Apply the docker role to the docker nodes"
+  hosts: cluster
+  become: yes
+  roles:
+    - docker

@@ -1,0 +1,121 @@
+---
+
+# - name: "Show host info"
+#   debug: var=hostvars[inventory_hostname]["instances"]
+
+- name: Check if the nvidia driver is install
+  shell: dpkg -l | grep nvidia-driver
+  changed_when: False
+  register: nvidia_driver_check
+  ignore_errors: true
+
+- debug: var=nvidia_driver_check.rc
+  when: debug|bool
+
+- name: Set the host grouping
+  set_fact:
+    host_grouping: "{% if inventory_hostname == groups['master'][0] %}master{% else %}worker{% endif %}"
+    nvidia_driver_exists: "{{ nvidia_driver_check.rc == 0 }}"
+
+# required for k8s ipvs proxy
+- name: Load ipvs kernel drivers
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  with_items:
+    - br_netfilter
+    - ip_vs_sh
+    - nf_conntrack
+    - ip_vs
+    - ip_vs_rr
+    - ip_vs_wrr
+    - ip_tables
+
+- name: Set net.bridge.bridge-nf-call-iptables to 1
+  sysctl: name=net.bridge.bridge-nf-call-iptables value=1 state=present ignoreerrors=yes
+
+- name: Set net.bridge.bridge-nf-call-ip6tables to 1
+  sysctl: name=net.bridge.bridge-nf-call-ip6tables value=1 state=present ignoreerrors=yes
+
+- name: Set net.bridge.bridge-nf-call-arptables to 1
+  sysctl: name=net.bridge.bridge-nf-call-arptables value=1 state=present ignoreerrors=yes
+
+- name: Set net.ipv4.ip_forward to 1
+  sysctl: name=net.ipv4.ip_forward value=1 state=present ignoreerrors=yes
+
+- name: Install packages required for docker
+  apt:
+    name: "{{ item }}"
+    state: latest
+  with_items:
+    - apt-transport-https
+    - ca-certificates
+    - "linux-modules-extra-{{ ansible_kernel }}"
+    - aufs-tools
+
+- name: Add dockerproject apt key
+  apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+
+- name: Add dockerproject apt source
+  lineinfile:
+    line: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ubuntu_version }} stable"
+    dest: /etc/apt/sources.list.d/docker.list
+    create: yes
+    owner: root
+    group: root
+    mode: 0644
+  register: installeddocker
+
+- name: Update apt cache
+  apt:
+    update_cache: yes
+
+- name: Install docker ce
+  apt:
+    name: "docker-ce={{ docker_version }}"
+    force: yes
+    state: present
+  notify:
+    - restart docker
+
+- name: Add ubuntu user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    append: yes
+    groups: docker
+
+- name: Ensure required docker packages are installed (apt)
+  apt:
+    name: "{{ item }}"
+    update_cache: yes
+    state: installed
+  with_items:
+  - python-pip
+  - python3-pip
+
+- name: install docker dependencies
+  pip:
+    name: docker-py
+
+- name: Create /etc/systemd/system/docker.service.d
+  file:
+    path: "/etc/systemd/system/docker.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Configure docker server
+  template: src=docker.conf.j2 dest="/etc/systemd/system/docker.service.d/docker.conf"
+  notify:
+    - reload systemd
+    - restart docker
+
+- name: Configure docker daemon
+  template: src=daemon.json.j2 dest="/etc/docker/daemon.json"
+  notify:
+    - reload systemd
+    - restart docker
+
+- meta: flush_handlers

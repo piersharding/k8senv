@@ -1,0 +1,41 @@
+#!/usr/bin/env ansible-playbook
+---
+
+- name: "Show debug info"
+  hosts:
+    - master
+    - workers
+  become: yes
+  tasks:
+    - name: "Show nodes info"
+      debug: var=hostvars[inventory_hostname]
+      when: debug|bool
+
+- name: "Apply the containerd role to the k8s nodes"
+  hosts:
+    - master
+    - workers
+  become: yes
+  roles:
+    - role: containerd
+      when: activate_nvidia|bool or activate_containerd|bool
+  tags:
+    - containerd
+
+- name: "Apply the k8s role to the k8s nodes"
+  hosts:
+    - master
+    - workers
+  become: yes
+  roles:
+    - k8s
+  tags:
+    - k8s
+
+# - name: "Oneoffs"
+#   hosts:
+#     - master
+#   tags:
+#     - fix
+#   become: yes
+#   tasks:

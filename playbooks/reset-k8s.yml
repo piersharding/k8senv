@@ -1,0 +1,34 @@
+#!/usr/bin/env ansible-playbook
+---
+
+- name: "Show debug info"
+  hosts:
+    - master
+    - workers
+  become: yes
+  tasks:
+    - name: "Show nodes info"
+      debug: var=hostvars[inventory_hostname]
+      when: debug|bool
+
+    - name: Reset node
+      shell: /usr/bin/kubeadm reset --force
+      ignore_errors: true
+
+    - name: Flush all chains
+      shell: /sbin/iptables -F
+
+    - name: Flush nat
+      shell: /sbin/iptables -t nat -F
+
+    - name: Flush mangle
+      shell: /sbin/iptables -t mangle -F
+
+    - name: Delete all chains
+      shell: /sbin/iptables -X
+
+    - name: Purge kubelet
+      apt:
+        name: kubelet
+        state: absent
+        purge: yes

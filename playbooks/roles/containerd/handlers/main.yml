@@ -1,0 +1,9 @@
+---
+- name: reload systemd
+  command: systemctl daemon-reload
+
+- name: restart containerd
+  service: name=containerd enabled=yes state=restarted
+
+- name: restart docker
+  service: name=docker enabled=yes state=restarted

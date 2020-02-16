@@ -1,0 +1,352 @@
+---
+- name: Get the username running the deploy
+  become: no
+  local_action: command whoami
+  register: username_on_the_host
+
+- debug: var=username_on_the_host.stdout_lines[0]
+  when: debug|bool
+
+- name: Check if the nvidia driver is install
+  shell: dpkg -l | grep nvidia-driver
+  changed_when: False
+  register: nvidia_driver_check
+  ignore_errors: true
+
+- debug: var=nvidia_driver_check.rc
+  when: debug|bool
+
+- name: Set the host grouping
+  set_fact:
+    host_grouping: "{% if inventory_hostname == groups['master'][0] %}master{% else %}worker{% endif %}"
+    cluster_api_address: "{{ hostvars[groups['master'][0]].ansible_default_ipv4.address }}"
+    cluster_hostname: "{{ hostvars[groups['master'][0]].ansible_hostname }}"
+    current_hostname: "{{ hostvars[inventory_hostname].ansible_hostname }}"
+    local_user: "{{ username_on_the_host.stdout_lines[0] }}"
+    local_user_dir: "/home/{{ username_on_the_host.stdout_lines[0] }}"
+    nvidia_driver_exists: "{{ nvidia_driver_check.rc == 0 }}"
+
+- name: Add k8s apt key
+  apt_key:
+    url: https://packages.cloud.google.com/apt/doc/apt-key.gpg
+    state: present
+
+- name: Add k8s apt source
+  lineinfile:
+    line: "deb http://apt.kubernetes.io/ kubernetes-{{ kubernetes_ubuntu_version }} main"
+    path: /etc/apt/sources.list.d/k8s.list
+    create: yes
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Update apt cache - again
+  apt:
+    update_cache: yes
+
+- name: Install k8s dependent packages
+  apt:
+    name: "{{ item }}"
+    force: yes
+    state: present
+  with_items:
+    - "conntrack"
+    - "ipvsadm"
+
+- name: Install kubeadm
+  apt:
+    name: "{{ item }}={{ kube_version }}"
+    force: yes
+    state: present
+  with_items:
+    - "kubectl"
+    - "kubeadm"
+    - "kubelet"
+  notify:
+    - restart kubelet
+
+- name:
+  stat: path=/etc/kubernetes/admin.conf
+  register: admin_conf
+  delegate_to: "{{ groups['master'][0] }}"
+  delegate_facts: True
+
+- name: "Show cluster_api_address"
+  debug: var=cluster_api_address
+  when: debug|bool
+
+- name: Check if "Cluster is active" is enabled.
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf version
+  changed_when: False
+  register: kubectl_version
+  ignore_errors: true
+  delegate_to: "{{ groups['master'][0] }}"
+  delegate_facts: True
+
+- name: "Show kubectl_version"
+  debug: var=kubectl_version
+  when: debug|bool
+
+- name: kubeadm config
+  template: src=kubeadm-init-config.yaml.j2 dest="/tmp/kubeadm-init-config.yaml"
+  when: inventory_hostname in groups['master']
+
+- name: Init Cluster on the first master.
+  shell: /usr/bin/kubeadm init
+    --config /tmp/kubeadm-init-config.yaml
+    --ignore-preflight-errors=Swap
+  when: "kubectl_version.stdout.find('Server Version:') == -1
+    and inventory_hostname in groups['master']"
+
+- name: Wait for API Server to come up
+  wait_for:
+    host: "{{ cluster_api_address }}"
+    port: 6443
+    delay: 10
+
+- name: retrieve kubectl config
+  fetch: src="/etc/kubernetes/admin.conf" dest="/tmp/admin.conf" flat=yes
+  when: "inventory_hostname in groups['master']"
+
+- name: Ensure the ~/.kube directory exists
+  file:
+    path: "{{ local_user_dir }}/.kube"
+    state: directory
+    mode: 0700
+    owner: "{{ local_user }}"
+    group: "{{ local_user }}"
+
+- name: Setup kubectl config
+  copy:
+    src: /tmp/admin.conf
+    dest: "{{ local_user_dir }}/.kube/config"
+    mode: 0644
+    owner: "{{ local_user }}"
+    group: "{{ local_user }}"
+
+- name: Ensure the /etc/kubernetes directory exists
+  file:
+    path: /etc/kubernetes
+    state: directory
+    mode: 0755
+  when: "inventory_hostname in groups['workers']"
+
+- name: Setup kubectl /etc/kubernetes/admin.conf for workers
+  copy:
+    src: /tmp/admin.conf
+    dest: /etc/kubernetes/admin.conf
+    mode: 0644
+    owner: root
+    group: root
+  when: "inventory_hostname in groups['workers']"
+
+- name: Check if "Networking is active"
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get deployment calico-kube-controllers --namespace kube-system
+  changed_when: False
+  register: kubectl_calico
+  ignore_errors: true
+  delegate_to: "{{ groups['master'][0] }}"
+  delegate_facts: True
+  when: "inventory_hostname in groups['master']"
+
+- name: "Show kubectl_calico"
+  debug: var=kubectl_calico
+  when: debug|bool
+
+- name: Init Cluster networking with Calico on the first master.
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf
+         apply -f https://docs.projectcalico.org/{{ calico_version }}/manifests/calico.yaml
+  when: "inventory_hostname in groups['master']
+    and  not kubectl_calico.rc == 0"
+
+- name: Reconfigure calico-node.
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system set env daemonset/calico-node {{ item }}
+  with_items:
+    - "FELIX_XDPENABLED=false"
+    - "CALICO_IPV4POOL_CIDR=10.200.0.0/16"
+    - "IP_AUTODETECTION_METHOD=interface={{ calico_interfaces }}"
+  when: "inventory_hostname in groups['master']
+    and  not kubectl_calico.rc == 0"
+
+- name: Wait for Networking to come up
+  shell: "kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods --field-selector 'status.phase!=Running' --namespace kube-system"
+  register: calico_check
+  until: calico_check.stdout_lines | reject('search','^No resources found') | list | count == 0
+  retries: 20
+  delay: 30
+  when: "inventory_hostname in groups['master']"
+
+- name: Create join token
+  shell: "kubeadm token create --print-join-command 2>/dev/null | tail -1"
+  register: kubeadm_join_token
+  when: "inventory_hostname in groups['master']"
+
+- name: Set token, endpoint, and cahash
+  set_fact:
+    join_token: "{{ kubeadm_join_token.stdout_lines[0].split()[4] }}"
+    join_endpoint: "{{ kubeadm_join_token.stdout_lines[0].split()[2] }}"
+    join_cahash: "{{ kubeadm_join_token.stdout_lines[0].split()[6] }}"
+  delegate_to: "{{ item }}"
+  delegate_facts: True
+  with_items: "{{ groups['workers'] }}"
+  when: "inventory_hostname in groups['master']"
+
+- name: "Show join_token"
+  debug: var=join_token
+  when: debug|bool
+
+- name: kubeadm join config
+  template: src=kubeadm-join-config.yaml.j2 dest="/tmp/kubeadm-join-config.yaml"
+  when: inventory_hostname in groups['workers']
+
+- name: Check already joined
+  shell: "kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes | grep {{ current_hostname }}"
+  changed_when: False
+  register: kubectl_joined
+  ignore_errors: true
+  when: "inventory_hostname in groups['workers']"
+
+- name: "Show kubectl_joined"
+  debug: var=kubectl_joined
+  when: debug|bool
+
+- name: Init workers
+  shell: "kubeadm join {{ join_endpoint }}
+         --config=/tmp/kubeadm-join-config.yaml
+         --ignore-preflight-errors=Swap,IsDockerSystemdCheck"
+  when: "inventory_hostname in groups['workers']
+         and (kubectl_joined.stdout_lines | list | count == 0)"
+
+- name: Ensure the /etc/kubernetes/manifests directory exists
+  file:
+    path: /etc/kubernetes/manifests
+    state: directory
+    mode: 0755
+  when: "inventory_hostname in groups['workers']"
+
+- name: Check joining
+  shell: "kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes | grep {{ current_hostname }}"
+  changed_when: False
+  register: kubectl_joined
+  delegate_to: "{{ groups['master'][0] }}"
+  when: "inventory_hostname in groups['workers']"
+  tags:
+    - skip_ansible_lint # Suppressing the linter
+
+- name: "Show kubectl_joined"
+  debug: var=kubectl_joined
+  when: debug|bool
+
+- name: Wait for nodes to join
+  shell: "kubectl --kubeconfig=/etc/kubernetes/admin.conf get nodes  | grep {{ current_hostname }}"
+  register: calico_check
+  until: calico_check is success
+  retries: 10
+  delay: 30
+  delegate_to: "{{ groups['master'][0] }}"
+  when: "inventory_hostname in groups['workers']"
+
+- name: Wait for calico to settle
+  shell: "kubectl --kubeconfig=/etc/kubernetes/admin.conf get pods --field-selector 'status.phase!=Running' --namespace kube-system"
+  register: calico_check
+  until: calico_check.stdout_lines | reject('search','^No resources found') | list | count == 0
+  retries: 20
+  delay: 30
+  when: "inventory_hostname in groups['master']"
+
+# - name: ingress config
+#   template: src=ingress.yaml.j2 dest="/tmp/ingress.yaml"
+#   when: inventory_hostname in groups['master']
+
+- name: Check if "Ingress is active"
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get  deployment.apps/nginx-ingress-controller --namespace ingress-nginx
+  changed_when: False
+  register: kubectl_ingress
+  ignore_errors: true
+  when: "inventory_hostname in groups['master']"
+
+- name: "Show kubectl_ingress"
+  debug: var=kubectl_ingress
+  when: debug|bool
+
+- name: Init Ingress on the first master.
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf
+         apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/nginx-{{ nginx_ingress_version }}/deploy/static/mandatory.yaml
+  when: "inventory_hostname in groups['master']
+    and  not kubectl_ingress.rc == 0"
+
+- name: Set Ingress NodePort on the first master.
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf
+         apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/nginx-{{ nginx_ingress_version }}/deploy/static/provider/baremetal/service-nodeport.yaml
+  when: "inventory_hostname in groups['master']
+    and  not kubectl_ingress.rc == 0"
+
+- name: Patch Ingress NodePort 30080,30443 on the first master.
+  shell: |
+         kubectl --kubeconfig=/etc/kubernetes/admin.conf \
+         -n ingress-nginx patch service/ingress-nginx \
+         -p '{"spec":{"ports":[{"port":80,"nodePort":30080},{"port":443,"nodePort":30443}]}}'
+  when: "inventory_hostname in groups['master']
+    and  not kubectl_ingress.rc == 0"
+
+- name: storage config
+  template: src=storage.yaml.j2 dest="/tmp/storage.yaml"
+  when: inventory_hostname in groups['master']
+
+- name: Check if "Storage is active"
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get pod/storage-provisioner --namespace kube-system
+  changed_when: False
+  register: kubectl_storage
+  ignore_errors: true
+  when: "inventory_hostname in groups['master']"
+
+- name: "Show kubectl_storage"
+  debug: var=kubectl_storage
+  when: debug|bool
+
+- name: Init Storage on the first master.
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf
+         apply -f /tmp/storage.yaml
+  when: "inventory_hostname in groups['master']
+    and  not kubectl_storage.rc == 0"
+
+- name: Redirect Ingress localhost:80 to :30080
+  iptables:
+    table: nat
+    chain: PREROUTING
+    protocol: tcp
+    in_interface: lo
+    destination_port: '80'
+    jump: REDIRECT
+    to_ports: '30080'
+
+- name: Redirect Ingress localhost:443 to :30443
+  iptables:
+    table: nat
+    chain: PREROUTING
+    protocol: tcp
+    in_interface: lo
+    destination_port: '443'
+    jump: REDIRECT
+    to_ports: '30443'
+
+- name: Check if "nvidia RuntimeClass"
+  shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf get RuntimeClass nvidia
+  changed_when: False
+  register: kubectl_runtime
+  ignore_errors: true
+  when: "inventory_hostname in groups['master']
+    and activate_nvidia|bool"
+
+- name: Add nvidia RuntimeClass
+  shell: |
+         cat <<EOF | kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f -
+         apiVersion: node.k8s.io/v1beta1
+         kind: RuntimeClass
+         metadata:
+           name: nvidia
+           handler: nvidia
+         EOF
+  when: "inventory_hostname in groups['master']
+    and activate_nvidia|bool
+    and  not kubectl_runtime.rc == 0"
