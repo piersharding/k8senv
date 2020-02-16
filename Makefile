@@ -28,6 +28,21 @@ build_k8s: # Install containerd and Kubernetes and dependencies
 
 build: build_docker build_k8s # Build all Docker and Kubernetes
 
+checkdns: ## check DNS works in the Cluster
+	@echo "Check DNS:"
+	kubectl run -it --rm --restart=Never checkdns1 --image=busybox:1.28.3 \
+	sh -- -c "nslookup ingress-nginx.ingress-nginx"
+	kubectl run -it --rm --restart=Never checkdns2 --image=busybox:1.28.3 \
+	sh -- -c "nslookup www.ibm.com"
+
+checkingress: ## check the Ingress works in the Cluster
+	kubectl kustomize git@github.com:piersharding/kustomize-echo.git | kubectl apply -f -
+	while [ -z "$$(kubectl -n echoserver get ingress echoserver --template='{{range .status.loadBalancer.ingress}}{{.ip}}{{end}}')" ]; do echo "Waiting..."; sleep 10; done
+	sleep 5
+	ip=`kubectl -n echoserver get ingress echoserver -o json | jq -r .status.loadBalancer.ingress[].ip` \
+	printf "\nIP for echoservers is: $$ip\n\n"
+	curl -H "Host: echoserver.example.com" http://localhost:30080/ping
+	kubectl kustomize git@github.com:piersharding/kustomize-echo.git | kubectl -n echoserver delete -f -
 
 help:  ## show this help.
 	@echo "make targets:"
