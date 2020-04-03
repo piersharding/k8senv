@@ -17,7 +17,7 @@
 - name: Check nvidia-driver installed when Nvidia support requested
   fail:
     msg: The Nvidia driver has not been found (dpkg -l | grep nvidia-driver) - aborting.
-  when: activate_nvidia|bool and not nvidia_driver_exists|bool
+  when: activate_nvidia|bool and not ignore_nvidia_fail|bool and not nvidia_driver_exists|bool
 
 - name: Load containerd kernel drivers
   modprobe:
@@ -115,22 +115,32 @@
     path: /usr/local/bin/crictl
   register: stat_crictl
 
-- name: Download crictl
-  get_url:
-    url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ crictl_version }}/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
-    dest: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
-  when: stat_crictl.stat.exists == False
+- name: Check if the crictl version
+  shell: /usr/local/bin/crictl --version
+  changed_when: False
+  register: crictl_version_check
+  ignore_errors: true
 
-- name: unpack crictl
-  unarchive:
-    src: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
-    dest: /usr/local/bin
-  when: stat_crictl.stat.exists == False
+- name: crictl install
+  block:
 
-- name: tidy up crictl download
-  file:
-    path: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
-    state: absent
+    - name: Download crictl
+      get_url:
+        url: "https://github.com/kubernetes-sigs/cri-tools/releases/download/{{ crictl_version }}/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+        dest: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+
+    - name: unpack crictl
+      unarchive:
+        src: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+        dest: /usr/local/bin
+
+    - name: tidy up crictl download
+      file:
+        path: "/tmp/crictl-{{ crictl_version }}-linux-amd64.tar.gz"
+        state: absent
+
+  when: "stat_crictl.stat.exists == False or 
+        crictl_version_check.stdout.find(crictl_version) == -1"
 
 - name: configure crictl for containerd
   template: src=crictl.yaml.j2 dest="/etc/crictl.yaml"

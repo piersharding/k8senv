@@ -41,7 +41,7 @@ imageRepository: k8s.gcr.io
 kubernetesVersion: {{ kubernetes_version }}
 networking:
   dnsDomain: cluster.local
-  podSubnet: "10.200.0.0/16"
+  podSubnet: "{{ pod_network_cidr }}"
   serviceSubnet: 10.96.0.0/12
 scheduler: {}
 ---

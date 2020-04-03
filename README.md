@@ -29,7 +29,7 @@ ansible_ssh_common_args='-o ControlPersist=30m -o StrictHostKeyChecking=no -o Ba
 
 Environment variables for the deployment are:
 * `DEBUG` [default: `false`] - turn on debug output for the driver by setting this to `true`
-* `NVIDIA` [default: `false`] - enable Nvidia support by setting this to `true`
+* `NVIDIA` [default: `false`] - enable Nvidia support by setting this to `true` - tested with https://github.com/ska-telescope/CUDA_Gridder/tree/piers_harding
 * `CONTAINERD` [default: `true`] - disable containerd installation by setting this to `false`.  Note this will also disable Nvidia support.
 
 Use `make`, these values can be passed in with:

@@ -25,7 +25,7 @@ controlPlaneEndpoint: {{ join_endpoint }}
 kubernetesVersion: v1.17.1
 networking:
   dnsDomain: cluster.local
-  podSubnet: "10.200.0.0/16"
+  podSubnet: "{{ pod_network_cidr }}"
   serviceSubnet: 10.96.0.0/12
 ---
 apiVersion: kubelet.config.k8s.io/v1beta1

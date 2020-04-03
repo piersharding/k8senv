@@ -7,26 +7,29 @@ identityfile: "{{ lookup('env', 'HOME') }}/.ssh/id_rsa"
 # set to true to show host variables
 debug: false
 
-docker_version: 5:19.03.6~3-0~ubuntu-cosmic
+# docker version and ubuntu version are linked
+ubuntu_version: cosmic
+docker_version: "5:19.03.6~3-0~ubuntu-{{ ubuntu_version }}"
 
 docker_repo: wattle:5000
 
-ubuntu_version: cosmic
+# pod_network_cidr: 10.200.0.0/16
+pod_network_cidr: 10.10.0.0/16
 
-containerd_version: 1.2.6-3
+containerd_version: 1.2.13-1
 activate_containerd: true
-crictl_version: v1.17.0
+crictl_version: v1.18.0
 
 activate_nvidia: false
+ignore_nvidia_fail: false
 
+# dictated by here https://packages.cloud.google.com/apt/dists/kubernetes-<ubuntu version>
 kubernetes_ubuntu_version: xenial
 
-kubernetes_version: 1.17.3
+kubernetes_version: 1.18.0
 
 kube_version: "{{ kubernetes_version }}-00"
 
-calico_version: v3.11
-
-calico_interfaces: wlp1s.*,wlo.*,enxa0.*
+calico_version: v3.13
 
 nginx_ingress_version: 0.29.0

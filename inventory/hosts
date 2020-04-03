@@ -1,9 +1,7 @@
 [master]
-nautilus
+wattle
 
 [workers]
-seagull
-wattle
 
 [cluster:children]
 master

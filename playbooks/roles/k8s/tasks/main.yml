@@ -29,7 +29,7 @@
 - name: Check nvidia-driver installed when Nvidia support requested
   fail:
     msg: The Nvidia driver has not been found (dpkg -l | grep nvidia-driver) - aborting.
-  when: activate_nvidia|bool and not nvidia_driver_exists|bool
+  when: activate_nvidia|bool and not ignore_nvidia_fail|bool and not nvidia_driver_exists|bool
   
 - name: Add k8s apt key
   apt_key:
@@ -39,7 +39,7 @@
 - name: Add k8s apt source
   lineinfile:
     line: "deb http://apt.kubernetes.io/ kubernetes-{{ kubernetes_ubuntu_version }} main"
-    path: /etc/apt/sources.list.d/k8s.list
+    path: /etc/apt/sources.list.d/kubernetes.list
     create: yes
     owner: root
     group: root
@@ -70,11 +70,25 @@
   notify:
     - restart kubelet
 
-- name:
-  stat: path=/etc/kubernetes/admin.conf
-  register: admin_conf
-  delegate_to: "{{ groups['master'][0] }}"
-  delegate_facts: True
+- name: Ensure /etc/NetworkManager/conf.d exists
+  file:
+    path: /etc/NetworkManager/conf.d
+    state: directory
+    mode: 0755
+
+- name: Calico config for NetworkManager
+  blockinfile:
+    path: /etc/NetworkManager/conf.d/calico.conf
+    create: yes
+    block: |
+      [keyfile]
+      unmanaged-devices=interface-name:cali*;interface-name:tunl*
+
+# - name:
+#   stat: path=/etc/kubernetes/admin.conf
+#   register: admin_conf
+#   delegate_to: "{{ groups['master'][0] }}"
+#   delegate_facts: True
 
 - name: "Show cluster_api_address"
   debug: var=cluster_api_address
@@ -164,12 +178,15 @@
   when: "inventory_hostname in groups['master']
     and  not kubectl_calico.rc == 0"
 
+- name: ansible_default_ipv4.interface
+  debug: var=ansible_default_ipv4.interface
+
 - name: Reconfigure calico-node.
   shell: kubectl --kubeconfig=/etc/kubernetes/admin.conf -n kube-system set env daemonset/calico-node {{ item }}
   with_items:
     - "FELIX_XDPENABLED=false"
-    - "CALICO_IPV4POOL_CIDR=10.200.0.0/16"
-    - "IP_AUTODETECTION_METHOD=interface={{ calico_interfaces }}"
+    - "CALICO_IPV4POOL_CIDR={{ pod_network_cidr }}"
+    - "IP_AUTODETECTION_METHOD=interface={{ ansible_default_ipv4.interface }}"
   when: "inventory_hostname in groups['master']
     and  not kubectl_calico.rc == 0"
 

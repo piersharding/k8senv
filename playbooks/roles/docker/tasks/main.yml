@@ -20,7 +20,7 @@
 - name: Check nvidia-driver installed when Nvidia support requested
   fail:
     msg: The Nvidia driver has not been found (dpkg -l | grep nvidia-driver) - aborting.
-  when: activate_nvidia|bool and not nvidia_driver_exists|bool
+  when: activate_nvidia|bool and not ignore_nvidia_fail|bool and not nvidia_driver_exists|bool
 
 # required for k8s ipvs proxy
 - name: Load ipvs kernel drivers
@@ -94,7 +94,7 @@
   apt:
     name: "{{ item }}"
     update_cache: yes
-    state: installed
+    state: latest
   with_items:
   - python-pip
   - python3-pip
