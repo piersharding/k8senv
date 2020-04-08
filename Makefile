@@ -3,6 +3,7 @@ CONTAINERD ?= true
 NVIDIA ?= false
 IGNORE_NVIDIA_FAIL ?= false
 LIMIT ?=
+PROM_VAR_FILE ?= ./prometheus_node_metric_relabel_configs.yaml
 
 .PHONY: all build reset build_docker build_k8s clean help
 .DEFAULT_GOAL := help
@@ -28,6 +29,12 @@ build_k8s: # Install containerd and Kubernetes and dependencies
 	--extra-vars="activate_containerd=$(CONTAINERD) activate_nvidia=$(NVIDIA) ignore_nvidia_fail=$(IGNORE_NVIDIA_FAIL) debug=$(DEBUG)"
 
 build: build_docker build_k8s ## Build all Docker and Kubernetes
+
+# prometheus: build_docker ## Build all Docker and Prometheus
+prometheus: ## Build all Docker and Prometheus
+	ansible-playbook -i ./inventory $(LIMIT) playbooks/prometheus.yml \
+	--extra-vars=@$(PROM_VAR_FILE) \
+	--extra-vars="activate_containerd=$(CONTAINERD) activate_nvidia=$(NVIDIA) ignore_nvidia_fail=$(IGNORE_NVIDIA_FAIL) debug=$(DEBUG)"
 
 checkhosts: ## check Ansible can talk to all
 	ansible -i ./inventory cluster -b -m shell -a  "hostname;whoami; du -s -k /data/* || ture"

@@ -11,6 +11,41 @@
       debug: var=hostvars[inventory_hostname]
       when: debug|bool
 
+    - name: UnInstall prometheus-node-exporter
+      apt:
+        name: prometheus-node-exporter
+        state: absent
+
+    - name: Stop blackbox-exporter container
+      docker_container:
+        name: blackbox-exporter
+        state: absent
+
+    - name: Stop alertmanager container
+      docker_container:
+        name: alertmanager
+        state: absent
+
+    - name: Stop grafana container
+      docker_container:
+        name: grafana
+        state: absent
+
+    - name: Stop prometheus container
+      docker_container:
+        name: prometheus
+        state: absent
+
+    - name: Tidy up directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      with_items:
+        - /etc/prometheus
+        - /etc/grafana
+        - /etc/alertmanager
+        - /prometheus
+
     - name: Reset node
       shell: /usr/bin/kubeadm reset --force
       ignore_errors: true

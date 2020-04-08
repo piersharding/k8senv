@@ -99,9 +99,15 @@
   - python-pip
   - python3-pip
 
+- name: uninstall docker dependencies
+  pip:
+    name: docker
+    state: absent
+
 - name: install docker dependencies
   pip:
     name: docker-py
+    state: present
 
 - name: Create /etc/systemd/system/docker.service.d
   file:

@@ -1,0 +1,59 @@
+---
+# tasks file for prometheus
+
+- name: Install distutils 
+  apt:
+    pkg:
+      - python3-distutils
+      - python3-requests
+    state: present
+    update_cache: yes
+
+# - name: Download get-pip.py
+#   get_url:
+#     url: https://bootstrap.pypa.io/get-pip.py
+#     dest: /tmp/get-pip.py
+#     mode: '0744'
+
+# - name: get-pip
+#   shell: |
+#     python3 /tmp/get-pip.py
+
+# - name: install certain python modules for docker
+#   pip:
+#     name: "{{ item.name }}"
+#     version: "{{ item.version }}"
+#     state: present
+#   with_items:
+#   - { name: docker, version: 4.2.0 }
+#   - { name: keystoneauth1, version: 3.1.0 }
+#   - { name: python-novaclient, version: 2.27.0 }
+#   - { name: rackspace-novaclient, version: 2.1 }
+#   - { name: python-heatclient, version: 2.0.0 }
+
+- include: blackbox_exporter.yml
+  # when: mode == "server" or mode == "all"
+
+- include: grafana_ceph.yml
+  # when: mode == "exporter" or mode == "all"
+
+- include: grafana_elasticstack.yml
+  # when: mode == "exporter" or mode == "all"
+
+- include: grafana_kubernetes.yml
+  # when: mode == "exporter" or mode == "all"
+
+- include: node_exporter.yml
+  # when: mode == "exporter" or mode == "all"
+
+- include: server.yml
+  # when: mode == "server" or mode == "all"
+
+- include: alert_manager.yml
+  # when: mode == "server" or mode == "all"
+
+- include: grafana.yml
+  # when: mode == "server" or mode == "all"
+
+# - include: runner_exporter.yml
+#   when: mode == "runner"

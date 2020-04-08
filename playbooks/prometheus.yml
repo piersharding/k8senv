@@ -1,0 +1,9 @@
+---
+
+- name: deploy_prometheus_server
+  hosts: master
+  vars:
+    mode: "server"
+  become: true
+  roles:
+    - prometheus

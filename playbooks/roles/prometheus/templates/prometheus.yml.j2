@@ -1,0 +1,226 @@
+#jinja2: trim_blocks: True, lstrip_blocks: True
+{{ ansible_managed | comment }}
+# http://prometheus.io/docs/operating/configuration/
+
+global:
+  {{ prometheus_global | to_nice_yaml(indent=2) | indent(2, False) }}
+  external_labels:
+    monitor: 'codelab-monitor'
+
+{% if prometheus_remote_write != [] %}
+remote_write:
+  {{ prometheus_remote_write | to_nice_yaml(indent=2) | indent(2, False) }}
+{% endif %}
+
+{% if prometheus_remote_read != [] %}
+remote_read:
+  {{ prometheus_remote_read | to_nice_yaml(indent=2) | indent(2, False) }}
+{% endif %}
+
+rule_files:
+  - {{ prometheus_config_dir }}/rules/*.rules
+
+{% if prometheus_alertmanager_config | length > 0 %}
+alerting:
+  alertmanagers:
+  {{ prometheus_alertmanager_config | to_nice_yaml(indent=2) | indent(2,False) }}
+  alert_relabel_configs: []
+{% endif %}
+
+scrape_configs:
+  {{ prometheus_scrape_configs | to_nice_yaml(indent=2) | indent(2,False) }}
+
+  - job_name: 'blackbox'
+    metrics_path: /probe
+    params:
+      module: [ssh_banner]
+    static_configs:
+      - targets:
+        {{ blackbox_ssh_targets | to_nice_yaml(indent=8) | indent(8,False) }} # Targets to probe
+    relabel_configs:
+      # Ensure port is 22, pass as URL parameter
+      - source_labels: [__address__]
+        regex: (.*?)(:.*)?
+        replacement: ${1}:22
+        target_label: __param_target
+      # Make instance label the target
+      - source_labels: [__param_target]
+        target_label: instance
+      # Actually talk to the blackbox exporter though
+      - target_label: __address__
+        replacement: {{ ansible_fqdn | default(ansible_host) | default('localhost') }}:9115
+
+{% if k8s_api_server | length > 0 %}
+
+  - job_name: kube-scheduler
+    static_configs:
+    - targets:
+      - "{{ k8s_api_server_addr }}:10251"
+
+  - job_name: kube-proxy
+    static_configs:
+    - targets:
+      - "{{ k8s_api_server_addr }}:10249"
+
+  - job_name: kube-controller-manager
+    static_configs:
+    - targets:
+      - "{{ k8s_api_server_addr }}:10252"
+
+# https://github.com/prometheus/prometheus/blob/master/documentation/examples/prometheus-kubernetes.yml
+  - job_name: 'kube-apiserver'
+    kubernetes_sd_configs:
+    - role: endpoints
+      api_server: "{{ k8s_api_server }}"
+      # TLS config required in two places
+      tls_config:
+        ca_file: /etc/prometheus/ca.crt
+      bearer_token_file: /etc/prometheus/bearer.token
+    scheme: https
+    # TLS config required in two places
+    tls_config:
+      ca_file: /etc/prometheus/ca.crt
+    bearer_token_file: /etc/prometheus/bearer.token
+    relabel_configs:
+    - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+      action: keep
+      regex: default;kubernetes;https
+
+  - job_name: 'kubelet'
+    kubernetes_sd_configs:
+    - role: node
+      api_server: "{{ k8s_api_server }}"
+      # TLS config required in two places
+      tls_config:
+        ca_file: /etc/prometheus/ca.crt
+      bearer_token_file: /etc/prometheus/bearer.token
+    scheme: https
+    # TLS config required in two places
+    tls_config:
+      insecure_skip_verify: true
+    bearer_token_file: /etc/prometheus/bearer.token
+    metric_relabel_configs:
+    - action: labelmap
+      regex: __meta_kubernetes_node_label_(.+)
+    - target_label: __address__
+      replacement: kubernetes.default.svc:443
+    - source_labels: [__meta_kubernetes_node_name]
+      regex: (.+)
+      target_label: __metrics_path__
+      replacement: /api/v1/nodes/${1}/proxy/metrics
+
+  - job_name: 'cadvisor'
+    kubernetes_sd_configs:
+    - role: node
+      api_server: "{{ k8s_api_server }}"
+      # TLS config required in two places
+      tls_config:
+        ca_file: /etc/prometheus/ca.crt
+      bearer_token_file: /etc/prometheus/bearer.token
+    scheme: https
+    # TLS config required in two places
+    tls_config:
+      insecure_skip_verify: true
+    bearer_token_file: /etc/prometheus/bearer.token
+    metric_relabel_configs:
+    - action: labelmap
+      regex: __meta_kubernetes_node_label_(.+)
+    - target_label: __address__
+      replacement: kubernetes.default.svc:443
+    - source_labels: [__meta_kubernetes_node_name]
+      regex: (.+)
+      target_label: __metrics_path__
+      replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+
+# # metrics from service endpoints on /metrics over https via the master proxy
+# # set annotation (prometheus.io/scrape: true) to enable
+# # Example: kubectl annotate svc myservice prometheus.io/scrape=true
+#   - job_name: 'kubernetes-service-endpoints'
+#     kubernetes_sd_configs:
+#     - role: endpoints
+#       api_server: "{{ k8s_api_server }}"
+#       # TLS config required in two places
+#       tls_config:
+#         ca_file: /etc/prometheus/ca.crt
+#       bearer_token_file: /etc/prometheus/bearer.token
+#     scheme: https
+#     # TLS config required in two places
+#     tls_config:
+#       insecure_skip_verify: true
+#     bearer_token_file: /etc/prometheus/bearer.token
+#     relabel_configs:
+#     - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+#       action: keep
+#       regex: true
+#     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_port]
+#       action: replace
+#       regex: (\d+)
+#       target_label: __meta_kubernetes_pod_container_port_number
+#     - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+#       action: replace
+#       regex: ()
+#       target_label: __meta_kubernetes_service_annotation_prometheus_io_path
+#       replacement: /metrics
+#     - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_pod_container_port_number, __meta_kubernetes_service_annotation_prometheus_io_path]
+#       target_label: __metrics_path__
+#       regex: (.+);(.+);(.+);(.+)
+#       replacement: /api/v1/namespaces/$1/services/$2:$3/proxy$4
+#     - target_label: __address__
+#       replacement: {{ k8s_api_server_addr }}:{{ k8s_api_server_port }}
+#     - action: labelmap
+#       regex: __meta_kubernetes_service_label_(.+)
+#     - source_labels: [__meta_kubernetes_namespace]
+#       action: replace
+#       target_label: kubernetes_namespace
+#     - source_labels: [__meta_kubernetes_service_name]
+#       action: replace
+#       target_label: kubernetes_name
+#     - source_labels: [__meta_kubernetes_pod_node_name]
+#       action: replace
+#       target_label: instance
+
+# # metrics from pod endpoints on /metrics over https via the master proxy
+# # set annotation (prometheus.io/scrape: true) to enable
+# # Example: kubectl annotate pod mypod prometheus.io/scrape=true
+#   - job_name: 'kubernetes-pods'
+#     kubernetes_sd_configs:
+#     - role: pod
+#       api_server: "{{ k8s_api_server }}"
+#       # TLS config required in two places
+#       tls_config:
+#         ca_file: /etc/prometheus/ca.crt
+#       bearer_token_file: /etc/prometheus/bearer.token
+#     scheme: https
+#     # TLS config required in two places
+#     tls_config:
+#       insecure_skip_verify: true
+#     bearer_token_file: /etc/prometheus/bearer.token
+#     relabel_configs:
+#     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+#       action: keep
+#       regex: true
+#     - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+#       action: replace
+#       regex: ()
+#       target_label: __meta_kubernetes_pod_annotation_prometheus_io_path
+#       replacement: /metrics
+#     - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_pod_name, __meta_kubernetes_pod_container_port_number, __meta_kubernetes_pod_annotation_prometheus_io_path]
+#       target_label: __metrics_path__
+#       regex: (.+);(.+);(.+);(.+)
+#       replacement: /api/v1/namespaces/$1/pods/$2:$3/proxy$4
+#     - target_label: __address__
+#       replacement: {{ k8s_api_server_addr }}:{{ k8s_api_server_port }}
+#     - action: labelmap
+#       regex: __meta_kubernetes_pod_label_(.+)
+#     - source_labels: [__meta_kubernetes_namespace]
+#       action: replace
+#       target_label: kubernetes_namespace
+#     - source_labels: [__meta_kubernetes_pod_name]
+#       action: replace
+#       target_label: kubernetes_pod_name
+#     - source_labels: [__meta_kubernetes_pod_node_name]
+#       action: replace
+#       target_label: instance
+
+
+{% endif %}
